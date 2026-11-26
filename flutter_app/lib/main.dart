@@ -1,174 +1,351 @@
-import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-const apiBase = String.fromEnvironment(
-  'FITPILOT_API',
-  defaultValue: 'http://10.0.2.2:8000',
-);
+void main() {
+  runApp(const FitPilotApp());
+}
 
-void main() => runApp(const FitPilotApp());
-
-class FitPilotApp extends StatelessWidget {
+class FitPilotApp extends StatefulWidget {
   const FitPilotApp({super.key});
+
   @override
-  Widget build(BuildContext context) => MaterialApp(
-    title: 'FitPilot AI',
-    debugShowCheckedModeBanner: false,
-    theme: ThemeData(
-      colorScheme: ColorScheme.fromSeed(seedColor: const Color(0xFF28B887), brightness: Brightness.dark),
-      scaffoldBackgroundColor: const Color(0xFF101714),
-      useMaterial3: true,
-      cardTheme: const CardThemeData(color: Color(0xFF1A2520), elevation: 0),
-    ),
-    home: const HomePage(),
-  );
+  State<FitPilotApp> createState() => _FitPilotAppState();
 }
 
-class HomePage extends StatefulWidget {
-  const HomePage({super.key});
-  @override
-  State<HomePage> createState() => _HomePageState();
-}
-
-class _HomePageState extends State<HomePage> {
+class _FitPilotAppState extends State<FitPilotApp> {
   int tab = 0;
+
   final name = TextEditingController();
   final age = TextEditingController();
-  final height = TextEditingController();
-  final weight = TextEditingController();
   final budget = TextEditingController(text: '150');
-  final goal = 'General fitness';
-  String diet = 'Vegetarian';
-  String result = 'Your personalized plan will appear here.';
-  String foodResult = 'Upload a food photo to get an estimate. Confirm portion size for better accuracy.';
-  bool loading = false;
-  XFile? selectedImage;
 
-  Future<void> requestPlan() async {
-    setState(() { loading = true; result = 'Creating your plan…'; });
-    try {
-      final response = await http.post(
-        Uri.parse('$apiBase/plan'),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({
-          'name': name.text,
-          'age': int.tryParse(age.text) ?? 18,
-          'height_cm': double.tryParse(height.text) ?? 0,
-          'weight_kg': double.tryParse(weight.text) ?? 0,
-          'daily_food_budget_inr': double.tryParse(budget.text) ?? 150,
-          'diet_preference': diet,
-          'goal': goal,
-        }),
-      ).timeout(const Duration(seconds: 30));
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        result = data['plan'] ?? 'No plan returned.';
-      } else {
-        result = 'The AI service is not configured yet. Start the backend and add an API key. You can still explore the app demo.';
-      }
-    } catch (_) {
-      result = 'Could not reach the backend. Start the backend and check the API address. Demo mode is available.';
-    }
-    if (mounted) setState(() => loading = false);
+  String diet = 'Vegetarian';
+  String goal = 'General fitness';
+  bool saved = false;
+  File? foodImage;
+
+  final message = TextEditingController();
+  final List<Map<String, String>> chats = [];
+
+  @override
+  void initState() {
+    super.initState();
+    loadProfile();
+  }
+
+  Future<void> loadProfile() async {
+    final p = await SharedPreferences.getInstance();
+    if (!mounted) return;
+    setState(() {
+      name.text = p.getString('name') ?? '';
+      age.text = p.getString('age') ?? '';
+      budget.text = p.getString('budget') ?? '150';
+      diet = p.getString('diet') ?? 'Vegetarian';
+      goal = p.getString('goal') ?? 'General fitness';
+      saved = p.getBool('saved') ?? false;
+    });
+  }
+
+  Future<void> saveProfile() async {
+    final p = await SharedPreferences.getInstance();
+    await p.setString('name', name.text.trim());
+    await p.setString('age', age.text.trim());
+    await p.setString('budget', budget.text.trim());
+    await p.setString('diet', diet);
+    await p.setString('goal', goal);
+    await p.setBool('saved', true);
+
+    if (!mounted) return;
+    setState(() => saved = true);
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Profile saved successfully')),
+    );
   }
 
   Future<void> pickFood() async {
-    final image = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 75);
-    if (image == null) return;
-    setState(() { selectedImage = image; foodResult = 'Photo selected. Connect the vision AI service to analyze it.'; });
+    final picker = ImagePicker();
+    final image = await picker.pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 75,
+    );
+    if (image != null && mounted) {
+      setState(() => foodImage = File(image.path));
+    }
   }
 
-  Widget dashboard() => ListView(padding: const EdgeInsets.all(18), children: [
-    const Text('FITPILOT AI', style: TextStyle(letterSpacing: 2, color: Color(0xFF66D9A8), fontWeight: FontWeight.bold)),
-    const SizedBox(height: 10),
-    const Text('Your fitness, guided.', style: TextStyle(fontSize: 29, fontWeight: FontWeight.bold)),
-    const Text('A practical starting point for food, movement and consistency.', style: TextStyle(color: Colors.white70)),
-    const SizedBox(height: 20),
-    Row(children: [
-      Expanded(child: metric('Nutrition', 'Track meals', Icons.restaurant)),
-      const SizedBox(width: 10),
-      Expanded(child: metric('Training', 'Build routine', Icons.fitness_center)),
-    ]),
-    const SizedBox(height: 12),
-    Card(child: Padding(padding: const EdgeInsets.all(18), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      const Text('Your next step', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-      const SizedBox(height: 8),
-      const Text('Add your profile to get a starter plan. Plans are general guidance, not medical care.'),
-      const SizedBox(height: 12),
-      FilledButton(onPressed: () => setState(() => tab = 1), child: const Text('Set up profile')),
-    ]))),
-    const SizedBox(height: 12),
-    Card(child: ListTile(leading: const Icon(Icons.smart_toy), title: const Text('AI Coach'), subtitle: const Text('Ask about meals, workouts and habits'), onTap: () => setState(() => tab = 3))),
-  ]);
+  void sendMessage() {
+    final q = message.text.trim();
+    if (q.isEmpty) return;
 
-  Widget metric(String title, String subtitle, IconData icon) => Card(child: Padding(
-    padding: const EdgeInsets.all(16), child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-      Icon(icon, color: const Color(0xFF66D9A8)), const SizedBox(height: 10),
-      Text(title, style: const TextStyle(fontWeight: FontWeight.bold)),
-      Text(subtitle, style: const TextStyle(color: Colors.white60, fontSize: 12)),
-    ]),
-  ));
+    String answer;
+    final lower = q.toLowerCase();
 
-  Widget profile() => ListView(padding: const EdgeInsets.all(18), children: [
-    const Text('Your profile', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
-    const SizedBox(height: 6),
-    const Text('Only enter information you are comfortable sharing. A photo is optional.', style: TextStyle(color: Colors.white70)),
-    const SizedBox(height: 16),
-    field('Name (optional)', name), field('Age', age, numeric: true),
-    field('Height (cm)', height, numeric: true), field('Weight (kg)', weight, numeric: true),
-    field('Daily food budget (₹)', budget, numeric: true),
-    DropdownButtonFormField<String>(value: diet, decoration: const InputDecoration(labelText: 'Food preference', border: OutlineInputBorder()), items: ['Vegetarian','Non-vegetarian','Vegan','Eggetarian'].map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(), onChanged: (v) => setState(() => diet = v!)),
-    const SizedBox(height: 14),
-    FilledButton.icon(onPressed: loading ? null : requestPlan, icon: const Icon(Icons.auto_awesome), label: Text(loading ? 'Working…' : 'Generate starter plan')),
-    const SizedBox(height: 14),
-    Card(child: Padding(padding: const EdgeInsets.all(16), child: SelectableText(result))),
-    const SizedBox(height: 10),
-    const Text('For users under 18, involve a parent/guardian and qualified health professional before making major diet or training changes. This app does not prescribe weight-loss diets.', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
-  ]);
+    if (lower.contains('food') || lower.contains('diet')) {
+      answer = 'Choose balanced meals with vegetables, fruits, grains and protein sources. Your needs depend on your age, activity and health.';
+    } else if (lower.contains('workout') || lower.contains('exercise')) {
+      answer = 'Start with comfortable movement, warm up first, use correct form and allow time for recovery. Stop if you feel pain or unwell.';
+    } else if (lower.contains('sleep')) {
+      answer = 'A regular sleep schedule supports recovery, learning and everyday energy.';
+    } else {
+      answer = 'I am the FitPilot demo coach. Ask me about balanced nutrition, safe exercise, recovery or healthy routines. Live AI connection is not enabled yet.';
+    }
 
-  Widget field(String label, TextEditingController c, {bool numeric = false}) => Padding(
-    padding: const EdgeInsets.only(bottom: 12),
-    child: TextField(controller: c, keyboardType: numeric ? const TextInputType.numberWithOptions(decimal: true) : TextInputType.text, decoration: InputDecoration(labelText: label, border: const OutlineInputBorder())),
-  );
+    setState(() {
+      chats.add({'user': q, 'bot': answer});
+      message.clear();
+    });
+  }
 
-  Widget food() => ListView(padding: const EdgeInsets.all(18), children: [
-    const Text('Food photo estimator', style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
-    const SizedBox(height: 8),
-    const Text('Photo-based nutrition is an estimate. Ingredients and serving size can change the result substantially.', style: TextStyle(color: Colors.white70)),
-    const SizedBox(height: 18),
-    OutlinedButton.icon(onPressed: pickFood, icon: const Icon(Icons.add_a_photo), label: const Text('Choose food photo')),
-    if (selectedImage != null) Padding(padding: const EdgeInsets.only(top: 12), child: Text('Selected: ${selectedImage!.name}')),
-    const SizedBox(height: 12),
-    Card(child: Padding(padding: const EdgeInsets.all(16), child: Text(foodResult))),
-    const SizedBox(height: 12),
-    const Text('MVP note: image selection is implemented; vision analysis needs a configured vision model and secure server-side API key.', style: TextStyle(color: Colors.white60, fontSize: 12)),
-  ]);
-
-  Widget coach() => ListView(padding: const EdgeInsets.all(18), children: [
-    const Text('AI Coach', style: TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
-    const SizedBox(height: 8),
-    const Text('The coach endpoint will be connected after the AI provider is configured.'),
-    Card(child: Padding(padding: const EdgeInsets.all(16), child: const Text('Try asking: “Suggest an affordable vegetarian lunch” or “Explain how to do a safe beginner squat.”'))),
-    const Text('The coach should not diagnose conditions, recommend supplements as treatment, or give extreme diet plans.', style: TextStyle(color: Colors.orangeAccent, fontSize: 12)),
-  ]);
+  @override
+  void dispose() {
+    name.dispose();
+    age.dispose();
+    budget.dispose();
+    message.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
-    final pages = [dashboard(), profile(), food(), coach()];
-    return Scaffold(
-      body: SafeArea(child: pages[tab]),
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: tab,
-        onDestinationSelected: (v) => setState(() => tab = v),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.home_outlined), selectedIcon: Icon(Icons.home), label: 'Home'),
-          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Profile'),
-          NavigationDestination(icon: Icon(Icons.camera_alt_outlined), selectedIcon: Icon(Icons.camera_alt), label: 'Food AI'),
-          NavigationDestination(icon: Icon(Icons.smart_toy_outlined), selectedIcon: Icon(Icons.smart_toy), label: 'Coach'),
-        ],
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      title: 'FitPilot AI',
+      theme: ThemeData(
+        colorScheme: ColorScheme.fromSeed(
+          seedColor: const Color(0xFF28B887),
+          brightness: Brightness.dark,
+        ),
+        scaffoldBackgroundColor: const Color(0xFF101714),
+        useMaterial3: true,
       ),
+      home: Scaffold(
+        appBar: AppBar(
+          title: const Text('FITPILOT AI'),
+          backgroundColor: const Color(0xFF18251F),
+        ),
+        body: IndexedStack(
+          index: tab,
+          children: [
+            homePage(),
+            profilePage(),
+            foodPage(),
+            coachPage(),
+          ],
+        ),
+        bottomNavigationBar: NavigationBar(
+          selectedIndex: tab,
+          onDestinationSelected: (i) => setState(() => tab = i),
+          destinations: const [
+            NavigationDestination(icon: Icon(Icons.home_outlined), label: 'Home'),
+            NavigationDestination(icon: Icon(Icons.person_outline), label: 'Profile'),
+            NavigationDestination(icon: Icon(Icons.restaurant_outlined), label: 'Food AI'),
+            NavigationDestination(icon: Icon(Icons.smart_toy_outlined), label: 'Coach'),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget homePage() {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        const SizedBox(height: 12),
+        const Text(
+          'Your fitness journey starts here.',
+          style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        Text(saved ? 'Welcome, ${name.text}!' : 'Set up your profile to get started.'),
+        const SizedBox(height: 22),
+        metric('Your Profile', saved ? 'Saved' : 'Not set up', Icons.person),
+        metric('Nutrition', 'Balanced food guidance', Icons.restaurant),
+        metric('Training', 'Safe movement guidance', Icons.fitness_center),
+        const SizedBox(height: 18),
+        FilledButton(
+          onPressed: () => setState(() => tab = 1),
+          child: const Text('Set up / Edit Profile'),
+        ),
+        FilledButton.tonal(
+          onPressed: () => setState(() => tab = 2),
+          child: const Text('Open Food AI'),
+        ),
+        FilledButton.tonal(
+          onPressed: () => setState(() => tab = 3),
+          child: const Text('Talk to Coach'),
+        ),
+      ],
+    );
+  }
+
+  Widget metric(String title, String subtitle, IconData icon) {
+    return Card(
+      child: ListTile(
+        leading: Icon(icon, color: const Color(0xFF52D6A4), size: 30),
+        title: Text(title),
+        subtitle: Text(subtitle),
+      ),
+    );
+  }
+
+  Widget profilePage() {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        const Text('Your Profile', style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        const Text('Share only information you are comfortable providing.'),
+        const SizedBox(height: 18),
+        field('Name', name),
+        field('Age', age, number: true),
+        field('Daily food budget (optional)', budget, number: true),
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: diet,
+          decoration: const InputDecoration(labelText: 'Food preference', border: OutlineInputBorder()),
+          items: const [
+            DropdownMenuItem(value: 'Vegetarian', child: Text('Vegetarian')),
+            DropdownMenuItem(value: 'Non-vegetarian', child: Text('Non-vegetarian')),
+            DropdownMenuItem(value: 'Vegan', child: Text('Vegan')),
+            DropdownMenuItem(value: 'No preference', child: Text('No preference')),
+          ],
+          onChanged: (v) => setState(() => diet = v ?? diet),
+        ),
+        const SizedBox(height: 14),
+        DropdownButtonFormField<String>(
+          value: goal,
+          decoration: const InputDecoration(labelText: 'Your goal', border: OutlineInputBorder()),
+          items: const [
+            DropdownMenuItem(value: 'General fitness', child: Text('General fitness')),
+            DropdownMenuItem(value: 'Strength and mobility', child: Text('Strength and mobility')),
+            DropdownMenuItem(value: 'Improve stamina', child: Text('Improve stamina')),
+            DropdownMenuItem(value: 'Build healthy habits', child: Text('Build healthy habits')),
+          ],
+          onChanged: (v) => setState(() => goal = v ?? goal),
+        ),
+        const SizedBox(height: 20),
+        FilledButton.icon(
+          onPressed: saveProfile,
+          icon: const Icon(Icons.save),
+          label: const Text('Save Profile'),
+        ),
+        if (saved)
+          const Padding(
+            padding: EdgeInsets.only(top: 14),
+            child: Text('Your profile is saved on this device.'),
+          ),
+      ],
+    );
+  }
+
+  Widget field(String label, TextEditingController controller, {bool number = false}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: TextField(
+        controller: controller,
+        keyboardType: number ? TextInputType.number : TextInputType.text,
+        decoration: InputDecoration(
+          labelText: label,
+          border: const OutlineInputBorder(),
+        ),
+      ),
+    );
+  }
+
+  Widget foodPage() {
+    return ListView(
+      padding: const EdgeInsets.all(18),
+      children: [
+        const Text('Food AI', style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 10),
+        const Text('Choose a food photo. Photo selection works; automatic food recognition is not connected yet.'),
+        const SizedBox(height: 20),
+        OutlinedButton.icon(
+          onPressed: pickFood,
+          icon: const Icon(Icons.photo_library),
+          label: const Text('Choose Food Photo'),
+        ),
+        const SizedBox(height: 18),
+        if (foodImage != null)
+          ClipRRect(
+            borderRadius: BorderRadius.circular(14),
+            child: Image.file(foodImage!, height: 260, fit: BoxFit.cover),
+          ),
+        if (foodImage != null)
+          const Padding(
+            padding: EdgeInsets.only(top: 12),
+            child: Text('Photo selected. Nutrition estimates require a vision AI service and portion information.'),
+          ),
+      ],
+    );
+  }
+
+  Widget coachPage() {
+    return Column(
+      children: [
+        const Padding(
+          padding: EdgeInsets.all(16),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text('FitPilot Coach', style: TextStyle(fontSize: 25, fontWeight: FontWeight.bold)),
+          ),
+        ),
+        Expanded(
+          child: chats.isEmpty
+              ? const Center(child: Text('Ask about nutrition, movement or recovery.'))
+              : ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: chats.length,
+                  itemBuilder: (context, i) => Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Align(
+                        alignment: Alignment.centerRight,
+                        child: Card(
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Text(chats[i]['user']!),
+                          ),
+                        ),
+                      ),
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: Card(
+                          color: const Color(0xFF214536),
+                          child: Padding(
+                            padding: const EdgeInsets.all(12),
+                            child: Text(chats[i]['bot']!),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+        ),
+        Padding(
+          padding: const EdgeInsets.all(10),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: message,
+                  decoration: const InputDecoration(
+                    hintText: 'Ask your coach...',
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => sendMessage(),
+                ),
+              ),
+              IconButton(
+                onPressed: sendMessage,
+                icon: const Icon(Icons.send),
+              ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }
